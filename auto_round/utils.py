@@ -171,7 +171,69 @@ def quant_weight_sym(weight, num_bits=4, v=0, min_scale=0, max_scale=0, scale_dt
     return scale * (q - zp), scale, zp
 
 
-def quant_weight_actor(weight, num_bits, sym, v, min_scale, max_scale, scale_dtype=torch.float16):
+_FORMAT_CACHE = {
+    # data type: ebits, mbits, emax, max_norm, min_norm
+    "mx_int8": (0, 8, 0, 1.984375, 0)
+    "mx_int4": (0, 4, 0, 1.75, 0)
+    "mx_int2": (0, 2, 0, 1.0, 0)
+    "mx_fp8e5m2": (5, 4, 15, 57344.0, 6.103515625e-05)
+    "mx_fp8e4m3": (4, 5, 7, 224.0, 0.015625)
+    "mx_fp6e3m2": (3, 4, 3, 14.0, 0.25)
+    "mx_fp6e2m3": (2, 5, 1, 3.75, 1.0)
+    "mx_fp4": (2, 3, 1, 3.0, 1.0)
+    "mx_fp4e2m1": (2, 3, 1, 3.0, 1.0)
+    "mx_float16": (5, 12, 15, 65504.0, 6.103515625e-05)
+    "mx_fp16": (5, 12, 15, 65504.0, 6.103515625e-05)
+    "mx_bfloat16": (8, 9, 127, 3.3895313892515355e+38, 1.1754943508222875e-38)
+    "bmx_f16": (8, 9, 127, 3.3895313892515355e+38, 1.1754943508222875e-38)
+}
+
+FP32_EXPONENT_BIAS = 127
+FP32_MIN_NORMAL = 2 ** (-FP32_EXPONENT_BIAS + 1)
+
+def quant_mx(weight, data_type, v, min_scale, max_scale):
+    ebits, mbits, emax, max_norm, min_norm = _FORMAT_CACHE[data_type]
+    print(max_scale)
+    weight *= max_scale + 1.0
+    shared_exp, _ = torch.max(torch.abs(weight), dim=-1, keepdim=True)
+    shared_exp = torch.floor(torch.log2(shared_exp + FP32_MIN_NORMAL * (shared_exp == 0).type(shared_exp.dtype)))
+    shared_exp = shared_exp - emax
+    scale_emax = 2 ** (scale_bits - 1) - 1
+    shared_exp[shared_exp > scale_emax] = float("NaN")
+    shared_exp[shared_exp < -scale_emax] = -scale_emax
+    weight = weight / (2**shared_exp)
+
+    if exp_bits != 0:
+        private_exp = torch.floor(torch.log2(torch.abs(weight) + (weight == 0).type(weight.dtype)))
+
+        # The minimum representable exponent for 8 exp bits is -126
+        min_exp = -(2 ** (exp_bits - 1)) + 2
+        private_exp = private_exp.clip(min=min_exp)
+    else:
+        private_exp = None
+
+    # Scale up so appropriate number of bits are in the integer portion of the number
+    weight = weight * (2**(bits - 2)) if private_exp is None else weight / (2**private_exp) * (2**(bits - 2))
+
+    weight = torch.sign(weight) * round_ste(out + v)
+    max_mantissa = 2 ** (bits - 1) - 1
+    weight = torch.clamp(weight, -max_mantissa, max_mantissa)
+
+    # Undo scaling
+    weight = weight / (2**(bits - 2)) if private_exp is None else weight / (2**(bits - 2)) * (2**private_exp)
+
+    if saturate_normals or exp_bits == 0:
+        weight = torch.clamp(weight, min=-max_norm, max=max_norm)
+
+    # handle Inf/NaN
+    weight[A == float("Inf")] = float("Inf")
+    weight[A == -float("Inf")] = -float("Inf")
+    weight[A == float("NaN")] = float("NaN")
+
+    return weight, shared_exp, None
+
+
+def quant_weight_actor(weight, num_bits, sym, v, min_scale, max_scale, scale_dtype=torch.float16, data_type="int"):
     """Quantizes and dequantizes weight symmetrically or asymmetrically .
 
     Args:
@@ -181,19 +243,31 @@ def quant_weight_actor(weight, num_bits, sym, v, min_scale, max_scale, scale_dty
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for weight
         max_scale: Maximum scale coefficient for weight
+        data_type: target quantization data type
 
     Returns:
         Quantized and dequantized weight, scale, zero-point
     """
     assert num_bits > 0, "num_bits should be larger than 0"
-    if sym:
-        return quant_weight_sym(weight, num_bits, v, min_scale, max_scale, scale_dtype)
-    else:
-        return quant_weight_asym(weight, num_bits, v, min_scale, max_scale, scale_dtype)
+    if "mx" in data_type:
+        return quant_mx(weight, data_type, v, min_scale, max_scale)
+    elif data_type == "int":
+        if sym:
+            return quant_weight_sym(weight, num_bits, v, min_scale, max_scale, scale_dtype)
+        else:
+            return quant_weight_asym(weight, num_bits, v, min_scale, max_scale, scale_dtype)
 
 
 def quant_weight(
-    weight, num_bits=4, group_size=-1, sym=False, v=0, min_scale=0, max_scale=0, scale_dtype=torch.float16
+    weight,
+    num_bits=4,
+    group_size=-1,
+    sym=False,
+    v=0,
+    min_scale=0,
+    max_scale=0,
+    scale_dtype=torch.float16,
+    data_type="int",
 ):
     """Quantizes and dequantizes weight, handing the group size issue .
 
@@ -211,7 +285,14 @@ def quant_weight(
     """
     if group_size == -1 or weight.shape[1] < group_size:
         return quant_weight_actor(
-            weight, num_bits, sym=sym, v=v, min_scale=min_scale, max_scale=max_scale, scale_dtype=scale_dtype
+            weight,
+            num_bits,
+            sym=sym,
+            v=v,
+            min_scale=min_scale,
+            max_scale=max_scale,
+            scale_dtype=scale_dtype,
+            data_type=data_type,
         )
     orig_shape = weight.shape
     if weight.shape[1] % group_size == 0:
@@ -220,7 +301,14 @@ def quant_weight(
             v = v.reshape(-1, group_size)
 
         weight, scale, zp = quant_weight_actor(
-            weight, num_bits, sym=sym, v=v, min_scale=min_scale, max_scale=max_scale, scale_dtype=scale_dtype
+            weight,
+            num_bits,
+            sym=sym,
+            v=v,
+            min_scale=min_scale,
+            max_scale=max_scale,
+            scale_dtype=scale_dtype,
+            data_type=data_type,
         )
         weight = weight.reshape(orig_shape)
         scale = scale.reshape(weight.shape[0], -1)  ##only for linear, conv1d
@@ -236,7 +324,14 @@ def quant_weight(
         if isinstance(v, torch.Tensor):
             v = v.reshape(-1, group_size)
         weight_new, scale, zp = quant_weight_actor(
-            weight_new, num_bits, sym=sym, v=v, min_scale=min_scale, max_scale=max_scale, scale_dtype=scale_dtype
+            weight,
+            num_bits,
+            sym=sym,
+            v=v,
+            min_scale=min_scale,
+            max_scale=max_scale,
+            scale_dtype=scale_dtype,
+            data_type=data_type,
         )
         weight_new = weight_new.reshape(orig_shape[0], -1)
 

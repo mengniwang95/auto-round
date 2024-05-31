@@ -69,6 +69,7 @@ class WrapperLinear(torch.nn.Module):
         self.group_size = self.orig_layer.group_size
         self.scale_dtype = self.orig_layer.scale_dtype
         self.sym = self.orig_layer.sym
+        self.data_type = self.orig_layer.data_type
         weight_dtype = self.orig_layer.weight.dtype
         weight_dtype = torch.float32  ##TODO revert the change to check the accuracy
         self.value = torch.nn.Parameter(
@@ -112,6 +113,7 @@ class WrapperLinear(torch.nn.Module):
             min_scale,
             max_scale,
             self.scale_dtype,
+            self.data_type,
         )
         self.orig_layer.weight.data.copy_(q_dq_weight)
         self.orig_layer.weight.grad = None  ##clear grad
@@ -142,6 +144,7 @@ class WrapperLinear(torch.nn.Module):
             self.min_scale,
             self.max_scale,
             self.scale_dtype,
+            self.data_type,
         )
         weight_q = weight_q.to(weight.dtype)
         # pylint: disable=not-callable
@@ -177,6 +180,7 @@ class WrapperTransformerConv1d(torch.nn.Module):
         self.group_size = self.orig_layer.group_size
         self.sym = self.orig_layer.sym
         self.scale_dtype = self.orig_layer.scale_dtype
+        self.data_type = self.orig_layer.data_type
         weight_dtype = self.orig_layer.weight.dtype
         weight_dtype = torch.float32  ##TODO revert the change to check the accuracy
 
@@ -212,7 +216,15 @@ class WrapperTransformerConv1d(torch.nn.Module):
         min_scale.clamp_(-1, 0)
         max_scale.clamp_(-1, 0)
         weight_q, scale, zp = quant_weight(
-            self.weight_t, self.num_bits, self.group_size, self.sym, v, min_scale, max_scale, self.scale_dtype
+            self.weight_t,
+            self.num_bits,
+            self.group_size,
+            self.sym,
+            v,
+            min_scale,
+            max_scale,
+            self.scale_dtype,
+            self.data_type,
         )
         self.orig_layer.weight.data.copy_(weight_q.t())
         self.orig_layer.weight.grad = None
@@ -241,6 +253,7 @@ class WrapperTransformerConv1d(torch.nn.Module):
             self.min_scale,
             self.max_scale,
             self.scale_dtype,
+            self.data_type,
         )
         weight_q = weight_q.to(self.weight_t.dtype)
         size_out = x.size()[:-1] + (self.orig_layer.nf,)
@@ -433,7 +446,7 @@ class AutoRound(object):
         gradient_accumulate_steps: int = 1,
         not_use_best_mse: bool = False,
         dynamic_max_gap: int = -1,
-        data_type: str = "int",  ##only support int for now
+        data_type: str = "int",  #support int and mx
         scale_dtype: str = "fp16",
         **kwargs,
     ):
