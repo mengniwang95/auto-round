@@ -198,37 +198,36 @@ def quant_mx(weight, data_type, v, min_scale, max_scale):
     shared_exp, _ = torch.max(torch.abs(weight), dim=-1, keepdim=True)
     shared_exp = torch.floor(torch.log2(shared_exp + FP32_MIN_NORMAL * (shared_exp == 0).type(shared_exp.dtype)))
     shared_exp = shared_exp - emax
-    scale_emax = 2 ** (scale_bits - 1) - 1
+    scale_emax = 2 ** (8 - 1) - 1
     shared_exp[shared_exp > scale_emax] = float("NaN")
     shared_exp[shared_exp < -scale_emax] = -scale_emax
     weight = weight / (2**shared_exp)
 
-    if exp_bits != 0:
+    if ebits != 0:
         private_exp = torch.floor(torch.log2(torch.abs(weight) + (weight == 0).type(weight.dtype)))
 
         # The minimum representable exponent for 8 exp bits is -126
-        min_exp = -(2 ** (exp_bits - 1)) + 2
+        min_exp = -(2 ** (ebits - 1)) + 2
         private_exp = private_exp.clip(min=min_exp)
     else:
         private_exp = None
 
-    # Scale up so appropriate number of bits are in the integer portion of the number
-    weight = weight * (2**(bits - 2)) if private_exp is None else weight / (2**private_exp) * (2**(bits - 2))
+    # Scale up so appropriate number of mbits are in the integer portion of the number
+    weight = weight * (2**(mbits - 2)) if private_exp is None else weight / (2**private_exp) * (2**(mbits - 2))
 
-    weight = torch.sign(weight) * round_ste(out + v)
-    max_mantissa = 2 ** (bits - 1) - 1
+    weight = torch.sign(weight) * round_ste(weight + v)
+    max_mantissa = 2 ** (mbits - 1) - 1
     weight = torch.clamp(weight, -max_mantissa, max_mantissa)
 
     # Undo scaling
-    weight = weight / (2**(bits - 2)) if private_exp is None else weight / (2**(bits - 2)) * (2**private_exp)
+    weight = weight / (2**(mbits - 2)) if private_exp is None else weight / (2**(mbits - 2)) * (2**private_exp)
 
-    if saturate_normals or exp_bits == 0:
-        weight = torch.clamp(weight, min=-max_norm, max=max_norm)
+    weight = torch.clamp(weight, min=-max_norm, max=max_norm)
 
     # handle Inf/NaN
-    weight[A == float("Inf")] = float("Inf")
-    weight[A == -float("Inf")] = -float("Inf")
-    weight[A == float("NaN")] = float("NaN")
+    # weight[weight == float("Inf")] = float("Inf")
+    # weight[weight == -float("Inf")] = -float("Inf")
+    # weight[weight == float("NaN")] = float("NaN")
 
     return weight, shared_exp, None
 
@@ -595,10 +594,14 @@ def block_forward(block, input_ids, input_others, amp=False, amp_dtype=torch.flo
 
 def check_to_quantized(config):
     if isinstance(config, dict):
+        if "mx" in config["data_type"]:
+            return True
         if config["bits"] > 8 or "fp" in config["data_type"] or "float" in config["data_type"]:
             return False
         return True
     else:
+        if "mx" in config.data_type:
+            return True
         if config.bits > 8 or "fp" in config.data_type or "float" in config.data_type:
             return False
         return True

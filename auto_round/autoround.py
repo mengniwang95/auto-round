@@ -1216,7 +1216,7 @@ class AutoRound(object):
                     loss = mse_loss(  # pylint: disable=not-callable
                         output_q.to(torch.float32), current_output.to(torch.float32)
                     )
-
+                loss.requires_grad = True
                 total_loss += loss.item() / self.gradient_accumulate_steps
                 self.scale_loss_and_backward(scaler, loss)
             if i == 0:
