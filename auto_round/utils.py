@@ -177,25 +177,25 @@ _FORMAT_CACHE = {
     "mx_int4": (0, 4, 0, 1.75, 0),
     "mx_int2": (0, 2, 0, 1.0, 0),
     "mx_fp8e5m2": (5, 4, 15, 57344.0, 6.103515625e-05),
-    "mx_fp8e4m3": (4, 5, 7, 224.0, 0.015625),
-    "mx_fp6e3m2": (3, 4, 3, 14.0, 0.25),
-    "mx_fp6e2m3": (2, 5, 1, 3.75, 1.0),
-    "mx_fp4": (2, 3, 1, 3.0, 1.0),
-    "mx_fp4e2m1": (2, 3, 1, 3.0, 1.0),
+    "mx_fp8e4m3": (4, 5, 8, 448.0, 0.015625),
+    "mx_fp6e3m2": (3, 4, 4, 28.0, 0.25),
+    "mx_fp6e2m3": (2, 5, 2, 7.5, 1.0),
+    "mx_fp4": (2, 3, 2, 6.0, 1.0),
+    "mx_fp4e2m1": (2, 3, 2, 6.0, 1.0),
     "mx_float16": (5, 12, 15, 65504.0, 6.103515625e-05),
     "mx_fp16": (5, 12, 15, 65504.0, 6.103515625e-05),
     "mx_bfloat16": (8, 9, 127, 3.3895313892515355e+38, 1.1754943508222875e-38),
-    "bmx_f16": (8, 9, 127, 3.3895313892515355e+38, 1.1754943508222875e-38),
+    "mx_bf16": (8, 9, 127, 3.3895313892515355e+38, 1.1754943508222875e-38),
 }
 
 FP32_EXPONENT_BIAS = 127
 FP32_MIN_NORMAL = 2 ** (-FP32_EXPONENT_BIAS + 1)
 
 def quant_mx(weight, data_type, v, min_scale, max_scale):
+    # import pdb;pdb.set_trace()
     ebits, mbits, emax, max_norm, min_norm = _FORMAT_CACHE[data_type]
-    print(max_scale)
-    weight *= max_scale + 1.0
     shared_exp, _ = torch.max(torch.abs(weight), dim=-1, keepdim=True)
+    # shared_exp *= (max_scale.unsqueeze(dim=-1) + 1.5)
     shared_exp = torch.floor(torch.log2(shared_exp + FP32_MIN_NORMAL * (shared_exp == 0).type(shared_exp.dtype)))
     shared_exp = shared_exp - emax
     scale_emax = 2 ** (8 - 1) - 1
@@ -215,7 +215,7 @@ def quant_mx(weight, data_type, v, min_scale, max_scale):
     # Scale up so appropriate number of mbits are in the integer portion of the number
     weight = weight * (2**(mbits - 2)) if private_exp is None else weight / (2**private_exp) * (2**(mbits - 2))
 
-    weight = torch.sign(weight) * round_ste(weight + v)
+    weight = torch.sign(weight) * round_ste(torch.abs(weight) + v)
     max_mantissa = 2 ** (mbits - 1) - 1
     weight = torch.clamp(weight, -max_mantissa, max_mantissa)
 
@@ -224,11 +224,7 @@ def quant_mx(weight, data_type, v, min_scale, max_scale):
 
     weight = torch.clamp(weight, min=-max_norm, max=max_norm)
 
-    # handle Inf/NaN
-    # weight[weight == float("Inf")] = float("Inf")
-    # weight[weight == -float("Inf")] = -float("Inf")
-    # weight[weight == float("NaN")] = float("NaN")
-
+    weight = weight * (2**shared_exp)
     return weight, shared_exp, None
 
 

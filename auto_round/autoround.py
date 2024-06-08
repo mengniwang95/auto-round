@@ -146,6 +146,7 @@ class WrapperLinear(torch.nn.Module):
             self.scale_dtype,
             self.data_type,
         )
+        # import pdb;pdb.set_trace()
         weight_q = weight_q.to(weight.dtype)
         # pylint: disable=not-callable
         return F.linear(x, weight_q, self.orig_layer.bias)
@@ -525,7 +526,6 @@ class AutoRound(object):
         for key in serialization_keys:
             self.serialization_dict[key] = getattr(self, key)
         from .version import __version__
-
         self.serialization_dict["autoround_version"] = __version__
         if "scale_dtype" in self.serialization_dict.keys():
             self.serialization_dict["scale_dtype"] = str(self.serialization_dict["scale_dtype"])
@@ -1152,6 +1152,7 @@ class AutoRound(object):
                 input_ids[i] = None
             input_ids = q_input
         torch.cuda.empty_cache()
+        # import pdb;pdb.set_trace()
         quantized_layer_names, unquantized_layer_names = wrapper_block(block, self.enable_minmax_tuning)
 
         round_params = []
@@ -1175,7 +1176,7 @@ class AutoRound(object):
             )
         else:
             lr_schedule = copy.deepcopy(self.lr_scheduler)
-
+        # import pdb;pdb.set_trace()
         pick_samples = self.train_bs * self.gradient_accumulate_steps
         n_samples = len(input_ids)
         if self.sampler != "rand":
@@ -1216,7 +1217,6 @@ class AutoRound(object):
                     loss = mse_loss(  # pylint: disable=not-callable
                         output_q.to(torch.float32), current_output.to(torch.float32)
                     )
-                loss.requires_grad = True
                 total_loss += loss.item() / self.gradient_accumulate_steps
                 self.scale_loss_and_backward(scaler, loss)
             if i == 0:
@@ -1250,6 +1250,7 @@ class AutoRound(object):
         logger.info(dump_info)
         if len(unquantized_layer_names) != 0:
             logger.info(f"{unquantized_layer_names} have not been quantized")
+        # import pdb;pdb.set_trace()
         with torch.no_grad():
             unwrapper_block(block, best_v, best_min_scale, best_max_scale)
         if self.enable_quanted_input:
